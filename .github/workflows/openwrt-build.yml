@@ -1,0 +1,98 @@
+name: Build OpenWRT for New3 (MT7621)
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Clean disk & install dependencies
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+          docker rmi $(docker images -q) 2>/dev/null
+          sudo apt-get update && sudo apt-get install -y libtool automake autoconf bison flex
+          df -h
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          repository: coolsnowwolf/lede
+          submodules: true
+
+      - name: Update feeds & clean cache
+        run: |
+          ./scripts/feeds clean
+          ./scripts/feeds update -a -f
+          ./scripts/feeds install -a -f
+          rm -rf feeds/packages/devel/pcre2/{build_dir,stamp}
+          rm -rf dl/pcre2-*
+
+      - name: Generate New3 config file
+        run: |
+          echo "CONFIG_TARGET_ramips=y" > .config
+          echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+          echo "CONFIG_TARGET_ramips_mt7621_DEVICE_newifi-d2=y" >> .config
+          echo "CONFIG_PACKAGE_base-files=y" >> .config
+          echo "CONFIG_PACKAGE_busybox=y" >> .config
+          echo "CONFIG_PACKAGE_dropbear=y" >> .config
+          echo "CONFIG_PACKAGE_firewall=y" >> .config
+          echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
+          echo "CONFIG_PACKAGE_opkg=y" >> .config
+          echo "CONFIG_PACKAGE_wpad-basic-mbedtls=y" >> .config
+          echo "CONFIG_PACKAGE_luci=y" >> .config
+          echo "CONFIG_PACKAGE_luci-base=y" >> .config
+          echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
+          echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-wireguard=y" >> .config
+          echo "CONFIG_PACKAGE_wireguard-tools=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-wireguard=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-wireguard-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+          echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb-net=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb-net-rtl8152=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> .config
+          echo "CONFIG_PACKAGE_uqmi=y" >> .config
+          echo "CONFIG_PACKAGE_ppp=y" >> .config
+          echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+          echo "CONFIG_PACKAGE_usbutils=y" >> .config
+          echo "CONFIG_PACKAGE_linux-atm=n" >> .config
+          echo "CONFIG_PACKAGE_kmod-atm=n" >> .config
+          make defconfig
+
+      - name: Verify architecture config
+        run: |
+          if ! grep -q "CONFIG_TARGET_ramips_mt7621_DEVICE_newifi-d2=y" .config; then
+            echo "Error: New3 config missing!"
+            exit 1
+          fi
+          echo "✅ Config verified"
+
+      - name: Add swap space
+        run: |
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+      - name: Download packages
+        run: make download -j8
+
+      - name: Compile firmware
+        run: make -j$(nproc) || make -j1 V=s
+
+      - name: Check firmware files
+        run: |
+          ls -l bin/targets/ramips/mt7621/ || echo "No files"
+          ls -l bin/targets/
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-new3-firmware
+          path: bin/targets/ramips/mt7621/
+          if-no-files-found: error
